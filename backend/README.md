@@ -1,25 +1,28 @@
-# Solar panel backend
+# Güneş paneli backend'i
 
-## Database
+## Veritabanı
 
-The database has one row per panel and minute in two tables:
+Veritabanında iki tabloda, her panel ve dakika için bir kayıt tutulur:
 
-- `takipli_panel_kayitlari`: moving/tracking panel, including both servo angles
-  and sun azimuth/elevation.
-- `sabit_panel_kayitlari`: fixed panel.
+- `takipli_panel_kayitlari`: Her iki servo açısı ile güneş azimut ve yükseklik
+  açılarını da içeren hareketli/takipli panel kayıtları.
+- `sabit_panel_kayitlari`: Sabit panel kayıtları.
 
-Both tables use `(cihaz_id, acilis_sayaci, kayit_sira_no)` as their primary key.
-Apply `db/schema.sql` to a new database. For an existing two-table database,
-run `db/migrations/002_dashboard_latest_series.sql` and then
-`db/migrations/003_dashboard_api_v1.sql` once. For the original
-`minute_records` database, first run `db/migrations/001_split_panel_tables.sql`
-once, then migrations 002 and 003. Migration 001 drops `minute_records`; back up
-any data you want to keep first. Migration 003 converts stored panel current
-from amperes to milliamperes.
+Her iki tabloda da birincil anahtar olarak
+`(cihaz_id, acilis_sayaci, kayit_sira_no)` kullanılır. Yeni bir veritabanı için
+`db/schema.sql` dosyasını uygulayın. İki tablonun zaten bulunduğu bir veritabanı
+için sırasıyla `db/migrations/002_dashboard_latest_series.sql` ve
+`db/migrations/003_dashboard_api_v1.sql` dosyalarını birer kez çalıştırın.
+Önceki `minute_records` veritabanından geçiş yaparken önce
+`db/migrations/001_split_panel_tables.sql` dosyasını, ardından 002 ve 003
+migration'larını birer kez çalıştırın. 001 numaralı migration,
+`minute_records` tablosunu siler; saklamak istediğiniz verileri önceden
+yedekleyin. 003 numaralı migration, kayıtlı panel akımını amperden
+miliampere dönüştürür.
 
-## Run without Docker
+## Docker kullanmadan çalıştırma
 
-Use Node.js 20 or newer:
+Node.js 20 veya daha yeni bir sürüm kullanın:
 
 ```sh
 npm install
@@ -27,16 +30,25 @@ cp .env.example .env
 npm start
 ```
 
-Set either `DATABASE_URL` or the standard `PGHOST`, `PGPORT`, `PGDATABASE`,
-`PGUSER`, and `PGPASSWORD` variables. `PORT` defaults to `3000`.
-`CORS_ORIGIN` defaults to `*`; set it to a comma-separated origin allowlist
-for deployment.
+`DATABASE_URL` değişkenini veya standart `PGHOST`, `PGPORT`, `PGDATABASE`,
+`PGUSER` ve `PGPASSWORD` değişkenlerini ayarlayın. Varsayılan `PORT` değeri
+`3000`'dür. `CORS_ORIGIN` varsayılan olarak `*` değerini kullanır. Dağıtım
+ortamında bu değişkeni izin verilen origin'leri virgülle ayırarak belirtecek
+şekilde ayarlayın.
 
-## Device payload
+## Donanım I2C adresleri
+
+Cihaz yazılımı, şemadaki I2C adreslerini kullanmalıdır: PCA9685 için `0x40`,
+iki INA219 sensörü için `0x41` ve `0x44`. Bu backend I2C hattına erişmez;
+ölçümleri `POST /api/records` isteğiyle alır. Cihaz yazılımı, INA219
+okumalarını takipli veya sabit panelin ilgili payload alanlarına (`trk_*` ya da
+`fix_*`) yerleştirmelidir. API veya veritabanında adres ayarı gerekmez.
+
+## Cihaz payload'ı
 
 ### `POST /api/records`
 
-Send a JSON array with 1–20 minute records:
+1–20 adet dakikalık kayıt içeren bir JSON dizisi gönderin:
 
 ```json
 {
@@ -72,67 +84,75 @@ Send a JSON array with 1–20 minute records:
 }
 ```
 
-The API accepts the original Turkish payload keys and the ESP/frontend v1 keys
-(`device_id`, `boot`, `seq`, `ts`, `night`, `n`, `trk_ok`, `fix_ok`,
+API, özgün Türkçe payload anahtarlarını ve ESP/frontend v1 anahtarlarını kabul
+eder (`device_id`, `boot`, `seq`, `ts`, `night`, `n`, `trk_ok`, `fix_ok`,
 `trk_wh`/`fix_wh`, `trk_v`/`trk_ma`, `fix_v`/`fix_ma`, `sun_az`/`sun_el`,
-`servo_az`/`servo_el`, `uptime_s`). `ts`/`zaman_saniye` is Unix epoch time in
-seconds; `0` is stored as SQL `NULL`.
-`calisma_suresi_saniye` is optional and is supplied by the device. `alindi_at`
-is assigned by PostgreSQL when the server receives a new record; duplicate
-retries refresh this receive time without modifying the measurement values.
-Voltage is in V and current in mA on the v1 contract; legacy `akim_a` input is
-converted from amperes. New voltage/current/angle fields may be omitted and
-will be stored as `NULL` until the device sends them. `enerji_wh` is energy for
-the recorded minute; average power defaults to `enerji_wh * 60` when omitted.
-Both panel rows are written in one transaction; a database error or
-inconsistent duplicate state rolls the whole batch back. HTTP 200 confirms the
-device can clear its sent records.
+`servo_az`/`servo_el`, `uptime_s`). `ts`/`zaman_saniye`, saniye cinsinden Unix
+epoch zamanıdır; `0` değeri SQL `NULL` olarak kaydedilir.
+`calisma_suresi_saniye` isteğe bağlıdır ve cihaz tarafından gönderilir.
+Sunucu yeni bir kayıt aldığında `alindi_at` değeri PostgreSQL tarafından
+atanır. Yinelenen kayıtların yeniden gönderilmesi, ölçüm değerlerini
+değiştirmeden bu alınma zamanını günceller. v1 sözleşmesinde gerilim V,
+akım mA cinsindendir; eski `akim_a` girdisi amperden dönüştürülür. Yeni
+gerilim/akım/açı alanları gönderilmeyebilir; cihaz bu alanları gönderene kadar
+`NULL` olarak saklanırlar. `enerji_wh`, kaydedilen dakikanın enerjisidir;
+ortalama güç gönderilmezse `enerji_wh * 60` olarak hesaplanır.
+Her iki panel kaydı tek bir işlem içinde yazılır. Veritabanı hatası veya
+yinelenen kayıtlar arasında tutarsızlık olması durumunda tüm paket geri alınır.
+HTTP 200 yanıtı, cihazın gönderdiği kayıtları temizleyebileceğini belirtir.
 
-## Dashboard API
+## Gösterge paneli API'si
 
-All dashboard endpoints accept `device_id` (or legacy `cihaz_id`). Date values
-are interpreted in `Europe/Istanbul`.
+Tüm gösterge paneli uç noktaları `device_id` (veya eski adıyla `cihaz_id`)
+parametresini kabul eder. Tarihler `Europe/Istanbul` saat dilimine göre
+yorumlanır.
 
 ### `GET /api/dashboard/series?device_id=panel-01&date=2026-11-09&interval=5`
 
-Returns the requested day's paired minute points in the v1 response format.
-`interval` is optional and samples one point every 1–60 minutes; it defaults to
-1. Timestamps are UTC instants and the day boundary is `Europe/Istanbul`.
-Each point contains `ts`, `night`, `n`, `trk_ok`, `fix_ok`, `trk_wh`, `fix_wh`,
-`trk_v`, `trk_ma`, `fix_v`, `fix_ma`, `sun_az`, `sun_el`, `servo_az`,
-`servo_el`, `trk_cumulative_wh`, and `fix_cumulative_wh`. Not-yet-reported
-sensor measurements are `null`.
+İstenen güne ait eşleştirilmiş dakika verilerini v1 yanıt biçiminde döndürür.
+`interval` isteğe bağlıdır; 1–60 dakika arasında bir değere ayarlanarak kaç
+dakikada bir veri noktası alınacağını belirler. Varsayılan değeri `1`'dir.
+Zaman damgaları UTC anlarını, gün sınırları ise `Europe/Istanbul` saat dilimini
+kullanır. Her veri noktası `ts`, `night`, `n`, `trk_ok`, `fix_ok`, `trk_wh`,
+`fix_wh`, `trk_v`, `trk_ma`, `fix_v`, `fix_ma`, `sun_az`, `sun_el`,
+`servo_az`, `servo_el`, `trk_cumulative_wh` ve `fix_cumulative_wh` alanlarını
+içerir. Henüz gönderilmemiş sensör ölçümleri `null` olur.
 
 ### `GET /api/dashboard/daily?device_id=panel-01&from=2026-11-01&to=2026-11-09`
 
-Returns an array with data-bearing days in the inclusive range (maximum 366
-days): `date`, `trk_wh`, `fix_wh`, `gain_wh`, `gain_percent`, `trk_peak_w`,
-`fix_peak_w`, `complete_minutes`, `total_minutes`, and `coverage_percent`.
-Energy includes only complete, daytime samples. Coverage is complete samples
-divided by all received samples with known timestamps for that day. A
-zero-energy fixed panel gives `gain_percent: null`.
+Belirtilen tarih aralığındaki (başlangıç ve bitiş tarihleri dahil, en fazla
+366 gün) veri bulunan günleri bir dizi olarak döndürür: `date`, `trk_wh`,
+`fix_wh`, `gain_wh`, `gain_percent`, `trk_peak_w`, `fix_peak_w`,
+`complete_minutes`, `total_minutes` ve `coverage_percent`. Enerji hesabına
+sadece gündüz alınan eksiksiz örnekler katılır. Kapsama oranı, eksiksiz
+örneklerin o gün zaman damgası bilinen tüm alınmış örneklere bölünmesiyle
+hesaplanır. Sabit panelin enerjisi sıfırsa `gain_percent: null` döner.
 
 ### `GET /api/dashboard/status?device_id=panel-01`
 
-Returns the latest sample's `night`, `uptime_s`, `boot`, panel values, gain, sun
-azimuth/elevation, servo azimuth/elevation, and online state. `last_record_at`
-is server receive time. `online` uses a 180-second threshold by default; change
-it with `ONLINE_THRESHOLD_SECONDS`. Missing devices and not-yet-reported sensor
-fields are returned as `null`. `/api/dashboard/latest` is an alias.
+En son örneğin `night`, `uptime_s`, `boot`, panel değerleri, kazanç, güneşin
+azimut/yükseklik açıları, servo azimut/yükseklik açıları ve çevrimiçi olma
+durumunu döndürür. `last_record_at`, kaydın sunucuya ulaştığı zamandır.
+`online` durumu varsayılan olarak 180 saniyelik bir eşik kullanır; bu değer
+`ONLINE_THRESHOLD_SECONDS` ile değiştirilebilir. Bulunmayan cihazlar ve henüz
+gönderilmemiş sensör alanları `null` olarak döndürülür.
+`/api/dashboard/latest`, bu uç noktanın diğer adıdır.
 
 ### `GET /api/devices`
 
-Returns each known `device_id`, online state, last server receive time, boot
-counter, and sequence number.
+Bilinen her cihaz için `device_id`, çevrimiçi olma durumu, sunucunun son kayıt
+alım zamanı, açılış sayacı ve sıra numarasını döndürür.
 
 ### `GET /api/dashboard/health?device_id=panel-01&from=2026-11-01&to=2026-11-09`
 
-Returns daily record count, expected minutes (1440), coverage, unknown-timestamp
-count and observed boot counters, plus timestamp gaps with missing-minute
-counts. Unknown timestamps are attributed to the day they reached the server.
-The response contains `{ "device_id", "days", "gaps" }`; `days` includes empty
-calendar days so missing coverage is visible.
+Günlük kayıt sayısını, beklenen dakika sayısını (1440), kapsama oranını,
+zaman damgası bilinmeyen kayıt sayısını ve gözlemlenen açılış sayaçlarını
+döndürür. Ayrıca zaman damgalarındaki boşlukları ve eksik dakika sayılarını
+belirtir. Zaman damgası bilinmeyen kayıtlar, sunucuya ulaştıkları güne
+atanır. Yanıt `{ "device_id", "days", "gaps" }` biçimindedir; kapsama
+eksikliklerinin görülebilmesi için `days` alanında kayıt bulunmayan takvim
+günleri de yer alır.
 
 ### `GET /healthz`
 
-Checks database connectivity.
+Veritabanı bağlantısını kontrol eder.
